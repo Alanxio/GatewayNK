@@ -1,0 +1,7 @@
+# Configuración de ngrok generada por scripts/expose.sh (sin secretos) y estado local
+.ngrok/
+.state/
+# Secretos: authtoken de ngrok
+Gateway/.env
+.env
+node_modules/

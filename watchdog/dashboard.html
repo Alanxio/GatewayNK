@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GateWayNK Estado</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f2; --surface: #fcfcfb; --surface-2: #f0efec; --border: #e2e1dc;
+    --text: #0b0b0b; --text-2: #52514e; --muted: #8a8984;
+    --series-tls: #2a78d6; --series-http: #eb6834;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+    --grid: #e7e6e1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #2e2e2c;
+      --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+      --series-tls: #3987e5; --series-http: #d95926;
+      --grid: #2a2a28;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #2e2e2c;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+    --series-tls: #3987e5; --series-http: #d95926;
+    --grid: #2a2a28;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2);
+    margin: 0 0 10px; font-weight: 600; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .live.on i { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+  .spacer { flex: 1; }
+  .overall { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+    font-weight: 600; background: var(--surface); border: 1px solid var(--border); }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+  .span-8 { grid-column: span 8; } .span-4 { grid-column: span 4; } .span-12 { grid-column: span 12; }
+  @media (max-width: 900px) { .span-8, .span-4 { grid-column: span 12; } }
+
+  .services { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .svc { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--surface-2); }
+  .svc-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .svc-meta { color: var(--text-2); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
+  .badge svg { width: 14px; height: 14px; flex: none; }
+  .ok { color: var(--good); } .warn { color: var(--warning); } .bad { color: var(--critical); } .idle { color: var(--muted); }
+
+  /* Etiqueta encima y valor debajo: en una columna estrecha las URL no se parten letra a letra. */
+  .kv { margin: 0; }
+  .kv dt { color: var(--text-2); font-size: 12px; margin-top: 12px; }
+  .kv dt:first-child { margin-top: 0; }
+  .kv dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .kv small { display: block; margin-top: 2px; }
+
+  .chart-wrap { position: relative; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); margin-bottom: 6px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  svg.chart { width: 100%; height: 190px; display: block; }
+  .tooltip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+    white-space: nowrap; display: none; z-index: 2; }
+  .tooltip b { display: block; margin-bottom: 2px; }
+  .chart-foot { display: flex; justify-content: space-between; color: var(--text-2); font-size: 12px; margin-top: 6px; flex-wrap: wrap; gap: 8px; }
+  button.link { background: none; border: 0; padding: 0; color: var(--series-tls); cursor: pointer; font: inherit; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--text-2); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; }
+  .scroll.tall { max-height: 360px; overflow-y: auto; }
+  .scroll.tall thead th { position: sticky; top: 0; background: var(--surface); }
+
+  .events { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: auto; }
+  .events li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .events time { color: var(--muted); font-size: 12px; margin-right: 6px; font-variant-numeric: tabular-nums; }
+  .events details { margin-top: 4px; }
+  .events summary { cursor: pointer; color: var(--text-2); font-size: 12px; }
+  .events pre { margin: 6px 0 0; padding: 8px; background: var(--surface-2); border-radius: 6px; font-size: 11.5px;
+    overflow: auto; max-height: 220px; }
+  .empty { color: var(--muted); }
+  .theme-toggle { background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+    border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>GateWayNK</h1>
+    <span class="live" id="live"><i></i><span>conectando…</span></span>
+    <span class="spacer"></span>
+    <span class="overall" id="overall">…</span>
+    <button class="theme-toggle" id="theme" type="button" aria-label="Cambiar tema">Tema</button>
+  </header>
+
+  <div class="grid">
+    <section class="card span-12" aria-labelledby="h-services">
+      <h2 id="h-services">Servicios</h2>
+      <div class="services" id="services"></div>
+    </section>
+
+    <section class="card span-8" aria-labelledby="h-traffic">
+      <h2 id="h-traffic">Peticiones por minuto · última hora</h2>
+      <div class="legend" id="legend">
+        <span><i style="background:var(--series-tls)"></i>HTTPS (Nokia, nokia-tls)</span>
+        <span><i style="background:var(--series-http)"></i>HTTP (ngrok)</span>
+        <span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 0 L10 10 L0 10 Z" fill="var(--critical)"/></svg>con errores 5xx</span>
+      </div>
+      <div class="chart-wrap" id="chart-wrap">
+        <svg class="chart" id="chart" role="img" aria-label="Peticiones por minuto en la última hora"></svg>
+        <div class="tooltip" id="tooltip" role="status"></div>
+      </div>
+      <div class="chart-foot">
+        <span id="traffic-summary"></span>
+        <button class="link" id="toggle-table" type="button">Ver como tabla</button>
+      </div>
+      <div class="scroll" id="traffic-table" hidden></div>
+    </section>
+
+    <section class="card span-4" aria-labelledby="h-conn">
+      <h2 id="h-conn">Conexiones</h2>
+      <dl class="kv" id="connections"></dl>
+    </section>
+
+    <section class="card span-8" aria-labelledby="h-requests">
+      <h2 id="h-requests">Últimas peticiones</h2>
+      <div class="scroll tall"><table>
+        <thead><tr><th>Hora</th><th>Vía</th><th>IP</th><th>Petición</th><th>Código</th><th>Tiempo</th></tr></thead>
+        <tbody id="requests"></tbody>
+      </table></div>
+    </section>
+
+    <section class="card span-4" aria-labelledby="h-system">
+      <h2 id="h-system">Sistema</h2>
+      <dl class="kv" id="system"></dl>
+    </section>
+
+    <section class="card span-12" aria-labelledby="h-events">
+      <h2 id="h-events">Avisos</h2>
+      <ul class="events" id="events"></ul>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const TZ = 'Europe/Madrid';
+  const ICON = {
+    ok: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    warn: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l7 13H1z" fill="currentColor"/><path d="M8 6v4M8 12v.5" stroke="#000" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    bad: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    idle: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  };
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const hhmmss = (ms) => new Date(ms).toLocaleTimeString('es-ES', { timeZone: TZ, hour12: false });
+  const hhmm = (ms) => new Date(ms).toLocaleTimeString('es-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+  const dur = (ms) => { const s = Math.round(ms / 1000); if (s < 90) return `${s} s`; if (s < 5400) return `${Math.round(s / 60)} min`; if (s < 172800) return `${Math.round(s / 3600)} h`; return `${Math.round(s / 86400)} días`; };
+  const bytes = (n) => n == null ? '—' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(0)} MB` : `${(n / 1024).toFixed(0)} KB`;
+  const badge = (kind, label) => `<span class="badge ${kind}">${ICON[kind]}${esc(label)}</span>`;
+
+  // Tema: el botón alterna y se recuerda en este navegador.
+  try { const t = localStorage.getItem('gwnk-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+  $('theme').addEventListener('click', () => {
+    const dark = document.documentElement.dataset.theme
+      ? document.documentElement.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('gwnk-theme', document.documentElement.dataset.theme); } catch {}
+  });
+
+  let status = null;
+
+  function serviceKind(s) {
+    if (s.state !== 'running') return ['bad', s.state === 'restarting' ? 'reiniciando' : s.state];
+    if (s.health === 'unhealthy') return ['bad', 'no responde'];
+    if (s.health === 'starting') return ['warn', 'arrancando'];
+    return ['ok', s.health === 'healthy' ? 'sano' : 'en marcha'];
+  }
+
+  function renderServices() {
+    $('services').innerHTML = (status.services || []).map((s) => {
+      const [kind, label] = serviceKind(s);
+      const mem = s.memBytes != null ? bytes(s.memBytes) : '—';
+      const cpu = s.cpu != null ? `${s.cpu.toFixed(1)} %` : '—';
+      return `<div class="svc"><div class="svc-head">${esc(s.name)}<span class="spacer"></span>${badge(kind, label)}</div>
+        <div class="svc-meta">${s.state === 'running' ? `en marcha ${dur(s.upMs)}` : esc(s.status)}</div>
+        <div class="svc-meta">CPU ${cpu} · RAM ${mem}${s.restartCount ? ` · ${s.restartCount} reinicios` : ''}</div></div>`;
+    }).join('') || '<p class="empty">Sin datos todavía.</p>';
+  }
+
+  function renderOverall() {
+    const bad = (status.services || []).filter((s) => s.state !== 'running' || s.health === 'unhealthy').length
+      + (status.problems || []).length;
+    $('overall').innerHTML = bad ? badge('bad', `${bad} problema${bad > 1 ? 's' : ''}`) : badge('ok', 'Todo funciona');
+    document.title = bad ? `(${bad}) GateWayNK Estado` : 'GateWayNK Estado';
+  }
+
+  function renderConnections() {
+    const rows = [];
+    const wa = status.whatsapp;
+    rows.push(['WhatsApp', wa ? badge(wa.ok ? 'ok' : 'warn', wa.status) + ` <span class="idle">· ${dur(Date.now() - wa.since)}</span>` : badge('idle', 'sin datos')]);
+    const checks = Object.entries(status.publicChecks || {});
+    for (const [name, c] of checks) {
+      rows.push([esc(name.replace(/^(La|El) /, '')), `${badge(c.ok ? 'ok' : 'bad', c.ok ? 'responde' : 'no responde')} <span class="idle">· hace ${dur(Date.now() - c.checkedAt)}</span><small class="idle">${esc(c.url)}</small>`]);
+    }
+    if (!checks.length) rows.push(['Entradas', '<span class="idle">primera prueba en curso…</span>']);
+    if (status.ngrok?.http) rows.push(['ngrok HTTP', `<small>${esc(status.ngrok.http)}</small>`]);
+    if (status.tlsAddress) rows.push(['Nokia HTTPS', `<small>https://${esc(status.tlsAddress)}/ (${esc(status.tlsProvider)})</small>`]);
+    $('connections').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  }
+
+  function renderSystem() {
+    const rows = [];
+    const b = status.backup;
+    if (b && b.ok !== null && b.ok !== undefined) {
+      rows.push(['Copia', `${badge(b.ok ? 'ok' : 'bad', b.ok ? 'correcta' : 'fallida')} <span class="idle">· hace ${dur(Date.now() - b.atMs)}</span>${b.ok ? `<small class="idle">${esc(b.file)} · ${bytes(b.bytes)}</small>` : `<small class="bad">${esc(b.error)}</small>`}`]);
+    } else if (b) rows.push(['Copia', '<span class="idle">aún ninguna</span>']);
+    if (status.disk) {
+      const pct = Math.round((status.disk.freeBytes / status.disk.totalBytes) * 100);
+      rows.push(['Disco libre', `${bytes(status.disk.freeBytes)} <span class="idle">(${pct} %)</span>`]);
+    }
+    if (status.media) rows.push(['Media', `${bytes(status.media.bytes)} <span class="idle">· ${status.media.files} ficheros</span>`]);
+    for (const c of status.certs || []) {
+      rows.push([esc(c.name), `${badge(c.daysLeft < 30 ? 'warn' : 'ok', `${c.daysLeft} días`)} <span class="idle">· ${new Date(c.validTo).toLocaleDateString('es-ES')}</span>`]);
+    }
+    rows.push(['SMS de aviso', status.sms ? badge('ok', 'activos') : badge('idle', 'desactivados')]);
+    rows.push(['Vigilando', `desde hace ${dur(Date.now() - status.startedAt)}`]);
+    $('system').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  }
+
+  function renderRequests() {
+    const recent = [...(status.gateway?.recent || [])].reverse();
+    $('requests').innerHTML = recent.length ? recent.map((r) => {
+      const cls = r.status >= 500 || r.status === 0 ? 'bad' : r.status >= 400 ? 'warn' : '';
+      return `<tr><td>${hhmmss(r.at)}</td><td>${r.via === 'TLS' ? 'HTTPS' : 'HTTP'}</td><td>${esc(r.ip)}</td>
+        <td class="path">${esc(r.method)} ${esc(r.path)}</td><td class="${cls}">${r.status || 'cortada'}</td><td>${r.ms} ms</td></tr>`;
+    }).join('') : `<tr><td colspan="6" class="empty">${status.gateway ? 'Sin peticiones todavía.' : 'El Gateway no envía métricas.'}</td></tr>`;
+  }
+
+  // Barras apiladas por minuto: HTTPS abajo, HTTP encima, 2px de hueco entre segmentos.
+  // Un triángulo rojo encima marca los minutos con errores 5xx.
+  function renderChart() {
+    const svg = $('chart');
+    const W = svg.clientWidth || 600, H = 190, padL = 30, padB = 20, padT = 14;
+    const now = Date.now(), start = Math.floor(now / 60000) * 60000 - 59 * 60000;
+    const byT = new Map((status.gateway?.minutes || []).map((m) => [m.t, m]));
+    const data = Array.from({ length: 60 }, (_, i) => {
+      const t = start + i * 60000;
+      const m = byT.get(t) || { t, count: 0, tls: 0, http: 0, s5: 0, totalMs: 0 };
+      return m;
+    });
+    const max = Math.max(4, ...data.map((d) => d.tls + d.http));
+    const nice = Math.ceil(max / 4) * 4;
+    const plotW = W - padL - 4, plotH = H - padB - padT;
+    const bw = plotW / 60, barW = Math.max(2, bw - 2);
+    const y = (v) => padT + plotH - (v / nice) * plotH;
+    let out = '';
+    for (let i = 0; i <= 4; i++) {
+      const v = (nice / 4) * i, yy = y(v);
+      out += `<line x1="${padL}" x2="${W}" y1="${yy}" y2="${yy}" stroke="var(--grid)" stroke-width="1"/>`;
+      out += `<text x="${padL - 6}" y="${yy + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${v}</text>`;
+    }
+    data.forEach((d, i) => {
+      const x = padL + i * bw + (bw - barW) / 2;
+      const r = Math.min(4, barW / 2);
+      if (d.tls) {
+        const h = Math.max(1, (d.tls / nice) * plotH);
+        const top = !d.http;
+        out += top ? roundedTop(x, y(d.tls), barW, h, r, 'var(--series-tls)') : `<rect x="${x}" y="${y(d.tls)}" width="${barW}" height="${h}" fill="var(--series-tls)"/>`;
+      }
+      if (d.http) {
+        const base = y(d.tls) - (d.tls ? 2 : 0);
+        const h = Math.max(1, (d.http / nice) * plotH - (d.tls ? 2 : 0));
+        out += roundedTop(x, base - h, barW, h, r, 'var(--series-http)');
+      }
+      if (d.s5) {
+        // Triángulo apuntando hacia abajo, justo encima de la barra.
+        const cx = x + barW / 2, ty = y(d.tls + d.http) - 3;
+        out += `<path d="M${cx - 4} ${ty - 7} h8 l-4 7 z" fill="var(--critical)"/>`;
+      }
+      // Etiquetas cada 10 min; en pantallas estrechas la de las 50 se solaparía con «ahora».
+      if ((i % 10 === 0 && !(i === 50 && W < 500)) || i === 59) {
+        // La última etiqueta se alinea a la derecha para que no se corte.
+        out += `<text x="${i === 59 ? W - 2 : x + barW / 2}" y="${H - 4}" text-anchor="${i === 59 ? 'end' : 'middle'}" font-size="10" fill="var(--muted)">${i === 59 ? 'ahora' : hhmm(d.t)}</text>`;
+      }
+      out += `<rect class="hit" data-i="${i}" x="${padL + i * bw}" y="${padT}" width="${bw}" height="${plotH}" fill="transparent"/>`;
+    });
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML = out;
+    svg._data = data;
+
+    const total = data.reduce((a, d) => a + d.count, 0);
+    const tls = data.reduce((a, d) => a + d.tls, 0), err = data.reduce((a, d) => a + d.s5, 0);
+    const ms = data.reduce((a, d) => a + d.totalMs, 0);
+    $('traffic-summary').textContent = `${total} peticiones · ${tls} por HTTPS · ${err} errores · ${total ? Math.round(ms / total) : 0} ms de media`;
+    if (!$('traffic-table').hidden) renderTable(data);
+  }
+
+  function roundedTop(x, yTop, w, h, r, fill) {
+    r = Math.min(r, h);
+    return `<path d="M${x} ${yTop + h} V${yTop + r} Q${x} ${yTop} ${x + r} ${yTop} H${x + w - r} Q${x + w} ${yTop} ${x + w} ${yTop + r} V${yTop + h} Z" fill="${fill}"/>`;
+  }
+
+  function renderTable(data) {
+    const rows = data.filter((d) => d.count).reverse();
+    $('traffic-table').innerHTML = `<table><thead><tr><th>Minuto</th><th>HTTPS</th><th>HTTP</th><th>Errores 5xx</th><th>Media</th></tr></thead><tbody>${
+      rows.map((d) => `<tr><td>${hhmm(d.t)}</td><td>${d.tls}</td><td>${d.http}</td><td>${d.s5}</td><td>${Math.round(d.totalMs / d.count)} ms</td></tr>`).join('')
+      || '<tr><td colspan="5" class="empty">Sin peticiones en la última hora.</td></tr>'}</tbody></table>`;
+  }
+
+  $('toggle-table').addEventListener('click', () => {
+    const t = $('traffic-table');
+    t.hidden = !t.hidden;
+    $('toggle-table').textContent = t.hidden ? 'Ver como tabla' : 'Ocultar tabla';
+    if (!t.hidden) renderTable($('chart')._data || []);
+  });
+
+  // Tooltip por minuto (zona de toque = toda la columna).
+  const chart = $('chart'), tip = $('tooltip');
+  chart.addEventListener('mousemove', (e) => {
+    const hit = e.target.closest('.hit');
+    if (!hit) { tip.style.display = 'none'; return; }
+    const d = chart._data[Number(hit.dataset.i)];
+    tip.innerHTML = `<b>${hhmm(d.t)}</b>${d.tls} HTTPS · ${d.http} HTTP${d.s5 ? `<br><span class="bad">${d.s5} con error 5xx</span>` : ''}${d.count ? `<br>${Math.round(d.totalMs / d.count)} ms de media` : ''}`;
+    const box = $('chart-wrap').getBoundingClientRect();
+    tip.style.display = 'block';
+    const left = Math.min(e.clientX - box.left + 12, box.width - tip.offsetWidth - 4);
+    tip.style.left = `${Math.max(0, left)}px`;
+    tip.style.top = `${Math.max(0, e.clientY - box.top - 50)}px`;
+  });
+  chart.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+
+  function renderEvents() {
+    const list = [...(status.events || [])].reverse();
+    $('events').innerHTML = list.length ? list.map(eventHtml).join('') : '<li class="empty">Sin avisos.</li>';
+  }
+  function eventHtml(e) {
+    const kind = e.level === 'ALERTA' ? 'bad' : e.level === 'OK' ? 'ok' : 'idle';
+    const label = e.level === 'ALERTA' ? 'Alerta' : e.level === 'OK' ? 'Recuperado' : 'Info';
+    const logs = e.logs && e.logs.length ? `<details><summary>Últimas líneas de log</summary><pre>${esc(e.logs.join('\n'))}</pre></details>` : '';
+    return `<li><time>${new Date(e.at).toLocaleString('es-ES', { timeZone: TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>${badge(kind, label)} ${esc(e.message)}${logs}</li>`;
+  }
+
+  function renderAll() {
+    if (!status) return;
+    renderOverall(); renderServices(); renderConnections(); renderSystem(); renderRequests(); renderChart(); renderEvents();
+  }
+
+  // Tiempo real: el watchdog empuja el estado cada ~10 s y cada aviso al momento.
+  function connect() {
+    const es = new EventSource('/stream');
+    es.addEventListener('open', () => { $('live').className = 'live on'; $('live').lastElementChild.textContent = 'en directo'; });
+    es.addEventListener('status', (e) => { status = JSON.parse(e.data); renderAll(); });
+    es.addEventListener('event', (e) => {
+      if (!status) return;
+      status.events = [...(status.events || []), JSON.parse(e.data)].slice(-60);
+      renderEvents();
+    });
+    es.addEventListener('error', () => { $('live').className = 'live'; $('live').lastElementChild.textContent = 'reconectando…'; });
+  }
+  connect();
+  addEventListener('resize', () => status && renderChart());
+  setInterval(() => status && (renderServices(), renderConnections(), renderSystem()), 15000);
+})();
+</script>
+</body>
+</html>

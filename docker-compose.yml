@@ -1,0 +1,330 @@
+# Todos los puertos se publican solo en ${BIND_ADDR:-127.0.0.1}: lo único que tiene que
+# llegar desde fuera son los agentes de túnel de este PC (ngrok, playit), y así
+# nadie de la LAN puede saltarse el Gateway ni inventarse cabeceras (X-Forwarded-For,
+# X-Nokia-TLS). Para abrirlos a la LAN: BIND_ADDR=0.0.0.0 en Gateway/.env.
+#
+# Dentro de la red de Docker cada servicio escucha SIEMPRE en su puerto fijo (8080, 3001,
+# 3002, 4000, 3000); las variables *_PORT solo cambian el puerto del host.
+#
+# Auto-recuperación:
+#   · si un proceso muere, Docker lo reinicia (restart: unless-stopped);
+#   · si se queda congelado, su healthcheck falla y el servicio «watchdog» lo reinicia;
+#   · en ambos casos el watchdog avisa (terminal de expose.sh + SMS) con sus últimos logs.
+# Healthchecks: cada 30 s; mientras arrancan se prueban cada 2 s (start_interval), así
+# expose.sh sabe enseguida que están listos. Para el healthcheck «vale cualquier respuesta
+# HTTP»: un 503 sigue siendo un proceso vivo; congelado = no contesta en 8 s.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-healthcheck: &healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_interval: 2s
+
+services:
+  gateway:
+    build:
+      context: ./Gateway
+      dockerfile: Dockerfile
+    container_name: gateway
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    env_file:
+      - ./Gateway/.env
+    environment:
+      - GATEWAY_PORT=8080
+      - NOKIA_MSN_URL=http://nokia-msn:3001
+      - GALLERY_URL=http://gallery:3002
+      - PLAYME_URL=http://playme:4000
+      - DISCORD_PROXY_URL=http://discord-proxy:3000
+      - NOKIA_TLS_HOST=nokia-tls
+      # http-proxy usa util._extend (obsoleto en Node 22): solo ese aviso, sin efecto real.
+      - NODE_OPTIONS=--disable-warning=DEP0060
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health',{signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      start_period: 30s
+    networks:
+      - app-network
+
+  nokia-msn:
+    build:
+      context: ../NokiaMSN
+      dockerfile: Dockerfile
+    container_name: nokia-msn
+    restart: unless-stopped
+    init: true   # recoge los procesos zombi de Chromium (whatsapp-web.js)
+    stop_grace_period: 20s
+    # Si Chromium crece sin control, Docker lo mata al pasar de aquí (el watchdog avisa de
+    # «sin memoria (OOM)» y Docker lo reinicia) en vez de dejar sin RAM al resto del PC.
+    mem_limit: ${NOKIA_MSN_MEM_LIMIT:-2g}
+    logging: *logging
+    env_file:
+      - ../NokiaMSN/.env
+    environment:
+      - PORT=3001
+      - DB_PATH=/data/nokia.db
+      - ENV_FILE_PATH=/.env
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${NOKIA_MSN_PORT:-3001}:3001"
+    volumes:
+      - ../NokiaMSN/.env:/.env
+      - ../NokiaMSN/data:/data
+      - ../NokiaMSN/.wwebjs_auth:/usr/src/app/.wwebjs_auth
+      - ../NokiaMSN/public/media:/usr/src/app/public/media
+    healthcheck:
+      <<: *healthcheck
+      # Vivo = Express contesta (aunque sea 503 porque WhatsApp está desconectado; reiniciar
+      # no arregla un QR pendiente). Congelado = no contesta.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz',{signal:AbortSignal.timeout(8000)}).then(()=>process.exit(0),()=>process.exit(1))"]
+      start_period: 120s
+    networks:
+      - app-network
+
+  # HTTPS «a la antigua» para el Nokia 6111 (TLS 1.0 + AES, raíz propia instalada en el
+  # teléfono). Recibe el túnel TCP (playit.gg con PROXY v1, o ngrok TCP) y reenvía al
+  # Gateway. La raíz y los certificados viven en ../NokiaMSN/data/tls; public-address lo
+  # escribe scripts/expose.sh («host:puerto» público del túnel).
+  nokia-tls:
+    build:
+      context: ../NokiaMSN/tls-proxy
+      dockerfile: Dockerfile
+    container_name: nokia-tls
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    environment:
+      - GATEWAY_URL=http://gateway:8080
+      - LISTEN_PORT=8443
+      - TLS_DIR=/tls
+    volumes:
+      - ../NokiaMSN/data/tls:/tls
+    ports:
+      - "127.0.0.1:${NOKIA_TLS_PORT:-8443}:8443"
+    healthcheck:
+      <<: *healthcheck
+      # En claro por el mismo puerto sirve una página: prueba que su bucle de eventos vive.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8443/',{signal:AbortSignal.timeout(8000)}).then(()=>process.exit(0),()=>process.exit(1))"]
+      start_period: 20s
+    depends_on:
+      - gateway
+    networks:
+      - app-network
+
+  gallery:
+    image: node:22.23.3-slim
+    container_name: gallery
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    working_dir: /app
+    environment:
+      - PORT=3002
+    volumes:
+      - /home/alanxio/NetBeansProjects/Photolog/server:/app
+    # npm install solo si package.json / package-lock.json son más nuevos que la última
+    # instalación (antes se hacía en cada arranque).
+    command: >-
+      sh -c "if [ ! -f package.json ]; then echo '{\"name\":\"gallery\",\"private\":true,\"dependencies\":{\"sharp\":\"0.32.6\"}}' > package.json; fi &&
+      if [ ! -f node_modules/.package-lock.json ] || [ package.json -nt node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+      npm install --no-audit --no-fund && touch node_modules/.package-lock.json; fi &&
+      exec node /app/server.js"
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${GALLERY_PORT:-3002}:3002"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/',{signal:AbortSignal.timeout(8000)}).then(()=>process.exit(0),()=>process.exit(1))"]
+      start_period: 300s
+    networks:
+      - app-network
+
+  playme:
+    build:
+      context: ./docker/playme
+      dockerfile: Dockerfile
+    image: gatewaynk-playme
+    container_name: playme
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    working_dir: /app
+    environment:
+      - PORT=4000
+    volumes:
+      - /home/alanxio/NetBeansProjects/PlayME/server:/app
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${PLAYME_PORT:-4000}:4000"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/playme',{signal:AbortSignal.timeout(8000)}).then(()=>process.exit(0),()=>process.exit(1))"]
+      start_period: 300s
+    networks:
+      - app-network
+
+  discord-proxy:
+    build:
+      context: ../discord-j2me-5.3.1/proxy
+      dockerfile: Dockerfile
+    container_name: discord-proxy
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    environment:
+      - PORT=3000
+      - GATEWAY_PROXY_IP=discord-gateway
+      - GATEWAY_PROXY_PORT=3001
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${DISCORD_PROXY_PORT:-3003}:3000"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/',{signal:AbortSignal.timeout(8000)}).then(()=>process.exit(0),()=>process.exit(1))"]
+      start_period: 30s
+    depends_on:
+      - discord-gateway
+    networks:
+      - app-network
+
+  # Servidor TCP interno que le da a discord-proxy soporte de "gateway" (mensajes en vivo).
+  # No se expone ni al host ni al Gateway público: discord-proxy es el único que le habla,
+  # dentro de la red interna de Docker.
+  discord-gateway:
+    build:
+      context: ../discord-j2me-server-master
+      dockerfile: Dockerfile
+    container_name: discord-gateway
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    environment:
+      - PORT=3001
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "require('net').connect(3001,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      start_period: 30s
+    networks:
+      - app-network
+
+  # Agente de ngrok: entrada HTTP en claro y, si NOKIA_TLS_PROVIDER=ngrok, el túnel TCP del
+  # HTTPS del Nokia. Va en contenedor para que siga activo al cerrar la terminal y se
+  # reinicie solo. expose.sh genera .ngrok/ngrok.yml (sin secretos: el authtoken va por
+  # variable de entorno) y lo arranca con «--profile ngrok» solo cuando hace falta.
+  ngrok:
+    image: ngrok/ngrok:3.39.13-alpine
+    container_name: ngrok
+    profiles: ["ngrok"]
+    restart: unless-stopped
+    logging: *logging
+    command: ["start", "--all", "--config", "/etc/ngrok/ngrok.yml", "--log", "stdout"]
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
+    volumes:
+      - ./.ngrok:/etc/ngrok:ro
+    ports:
+      - "127.0.0.1:${NGROK_API_PORT:-4045}:4040"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4040/api/tunnels"]
+      start_period: 30s
+    depends_on:
+      - gateway
+    networks:
+      - app-network
+
+  # Único contenedor con el socket de Docker. Solo deja pasar lo que necesita el watchdog
+  # (listar, inspeccionar, logs, eventos, stats y reiniciar contenedores de ESTE proyecto);
+  # el socket completo equivaldría a ser root en el PC. Ver docker-guard/guard.mjs.
+  docker-guard:
+    build:
+      context: ./docker-guard
+      dockerfile: Dockerfile
+    container_name: docker-guard
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:2375/_ping',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      start_period: 10s
+    networks:
+      - app-network
+
+  # Vigila al resto (ver cabecera de este fichero y watchdog/watchdog.mjs) y sirve la página
+  # de estado en tiempo real: http://127.0.0.1:${STATUS_PORT:-8090} (solo desde este PC).
+  # Habla con Docker por docker-guard; las credenciales de Twilio de NokiaMSN son para los SMS.
+  watchdog:
+    build:
+      context: ./watchdog
+      dockerfile: Dockerfile
+    container_name: watchdog
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    env_file:
+      - ./Gateway/.env
+      - ../NokiaMSN/.env
+    environment:
+      - DOCKER_API=http://docker-guard:2375
+    ports:
+      - "127.0.0.1:${STATUS_PORT:-8090}:8090"
+    volumes:
+      - ../NokiaMSN/data/tls:/tls
+      - ./.ngrok:/ngrok:ro
+      - ./.state/watchdog:/state
+      - ../NokiaMSN/public/media:/media:ro
+      - ${BACKUP_DIR:-/home/alanxio/Backups/GateWayNK}:/backups:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "node", "-e", "process.exit(Date.now()-require('fs').statSync('/tmp/heartbeat').mtimeMs<90000?0:1)"]
+      start_period: 30s
+    depends_on:
+      - docker-guard
+    networks:
+      - app-network
+
+  # Copias de seguridad diarias (ver backup/backup.sh): nokia.db, la raíz TLS del Nokia, la
+  # sesión de WhatsApp (sin cachés) y los .env, en ${BACKUP_DIR} con permisos 600.
+  # Copia ahora mismo: scripts/expose.sh backup
+  backup:
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+    container_name: backup
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    environment:
+      - BACKUP_AT=${BACKUP_AT:-04:30}
+      - BACKUP_KEEP_DAILY=${BACKUP_KEEP_DAILY:-7}
+      - BACKUP_KEEP_WEEKLY=${BACKUP_KEEP_WEEKLY:-4}
+      - BACKUP_MEDIA=${BACKUP_MEDIA:-false}
+      - BACKUP_UID=${BACKUP_UID:-1000}
+      - BACKUP_GID=${BACKUP_GID:-1000}
+    volumes:
+      # data con escritura: SQLite en modo WAL necesita su fichero -shm incluso para leer
+      # (.backup no modifica la base de datos).
+      - ../NokiaMSN/data:/src/NokiaMSN/data
+      - ../NokiaMSN/.env:/src/NokiaMSN/.env:ro
+      - ../NokiaMSN/.wwebjs_auth:/src/NokiaMSN/.wwebjs_auth:ro
+      - ../NokiaMSN/public/media:/src/NokiaMSN/public/media:ro
+      - ./Gateway/.env:/src/GateWayNK/Gateway/.env:ro
+      - ${BACKUP_DIR:-/home/alanxio/Backups/GateWayNK}:/backups
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "sh", "-c", "[ $$(( $$(date +%s) - $$(stat -c %Y /tmp/heartbeat) )) -lt 120 ]"]
+      start_period: 30s
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
